@@ -159,16 +159,40 @@ def scrape_topic_directory(session: requests.Session = None) -> list[Topic]:
     seen = set()
     for a in soup.find_all("a", href=True):
         href: str = a["href"]
-        if "/topic/" in href:
-            slug = href.split("/topic/")[-1].split("?")[0].strip("/")
-            # skip the directory page itself and empty slugs
-            if not slug or slug == "topic":
-                continue
-            if slug not in seen:
-                seen.add(slug)
-                name = a.get_text(strip=True) or slug
-                clean_url = urljoin(BASE_URL, f"/topic/{slug}")
-                topics.append(Topic(slug=slug, name=name, url=clean_url, scraped_at=now))
+        if "/topic/" not in href:
+            continue
+        slug = href.split("/topic/")[-1].split("?")[0].strip("/")
+        if not slug or slug == "topic":
+            continue
+        if slug in seen:
+            continue
+        seen.add(slug)
+
+        # Prefer aria-label for clean name; fall back to first bold child text
+        name = a.get("aria-label") or ""
+        if not name:
+            bold = a.find(lambda t: t.name in ("b", "strong") or
+                          (t.name == "div" and "font-bold" in (t.get("class") or [])))
+            name = bold.get_text(strip=True) if bold else a.get_text(strip=True)
+
+        # Signature count in data-qa="topic-signatures-count" child
+        sig_tag = a.find(attrs={"data-qa": "topic-signatures-count"})
+        sig_count = None
+        if sig_tag:
+            import re as _re
+            num_tag = sig_tag.find("b") or sig_tag.find("strong")
+            raw_num = (num_tag.get_text(strip=True) if num_tag
+                       else _re.search(r"[\d.,]+", sig_tag.get_text()).group())
+            # Handle both . and , as thousands separators
+            cleaned = raw_num.replace(".", "").replace(",", "")
+            try:
+                sig_count = int(cleaned)
+            except ValueError:
+                pass
+
+        clean_url = urljoin(BASE_URL, f"/topic/{slug}")
+        topics.append(Topic(slug=slug, name=name, signature_count=sig_count,
+                            url=clean_url, scraped_at=now))
 
     log.info(f"Extracted {len(topics)} topics via HTML fallback")
     return topics
